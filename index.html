@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="mobile-web-app-capable" content="yes" />
+<title>المافيا</title>
+<style>
+  html, body { margin:0; padding:0; background:#050506; }
+</style>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ---------- helpers ----------
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function defaultCounts(n) {
+  const mafia = Math.max(1, Math.floor(n / 4));
+  const detective = n >= 5 ? 1 : 0;
+  const doctor = n >= 5 ? 1 : 0;
+  return { mafia, detective, doctor };
+}
+
+const ROLE_INFO = {
+  mafia: {
+    label: "المافيا",
+    color: "#9c2b45",
+    desc: "مهمتك التخلص من القرويين ليلاً دون كشف هويتك. تعاون مع بقية المافيا لاختيار ضحية كل ليلة.",
+  },
+  detective: {
+    label: "المحقق",
+    color: "#3d6b8a",
+    desc: "كل ليلة تقدر تتحرى عن شخص وحد لتعرف إن كان من المافيا أو لا.",
+  },
+  doctor: {
+    label: "الطبيب",
+    color: "#3d8a5f",
+    desc: "كل ليلة تقدر تحمي شخص واحد من هجوم المافيا — تقدر تحمي نفسك.",
+  },
+  villager: {
+    label: "قروي",
+    color: "#8a7a3d",
+    desc: "ما عندك قدرات خاصة. مهمتك تراقب وتتكلم وتصوّت بذكاء عشان تكشف المافيا.",
+  },
+};
+
+const SAVE_KEY = "mafiaGameState_v1";
+const STATS_KEY = "mafiaStats_v1";
+
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function loadStats() {
+  try {
+    const raw = localStorage.getItem(STATS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveStats(stats) {
+  try {
+    localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+  } catch (e) {}
+}
+
+function MafiaGame() {
+  const saved = loadSaved();
+
+  const [phase, setPhase] = useState(saved?.phase ?? "setup");
+  const [playerCount, setPlayerCount] = useState(saved?.playerCount ?? 5);
+  const [names, setNames] = useState(
+    saved?.names ?? Array.from({ length: 5 }, (_, i) => `اللاعب ${i + 1}`)
+  );
+  const [counts, setCounts] = useState(saved?.counts ?? defaultCounts(5));
+  const [discussMinutes, setDiscussMinutes] = useState(saved?.discussMinutes ?? 2);
+
+  const [players, setPlayers] = useState(saved?.players ?? []); // {id,name,role,alive}
+  const [revealIndex, setRevealIndex] = useState(saved?.revealIndex ?? 0);
+  const [hasViewed, setHasViewed] = useState(false);
+  const [pressed, setPressed] = useState(false);
+
+  const [round, setRound] = useState(saved?.round ?? 1);
+  const [mafiaTarget, setMafiaTarget] = useState(saved?.mafiaTarget ?? null);
+  const [doctorSave, setDoctorSave] = useState(saved?.doctorSave ?? null);
+  const [lastDoctorSave, setLastDoctorSave] = useState(saved?.lastDoctorSave ?? null);
+  const [detectiveTarget, setDetectiveTarget] = useState(saved?.detectiveTarget ?? null);
+  const detectiveTargetRef = useRef(detectiveTarget);
+  useEffect(() => { detectiveTargetRef.current = detectiveTarget; }, [detectiveTarget]);
+  const [detectiveResult, setDetectiveResult] = useState(saved?.detectiveResult ?? null);
+  const [detectiveRevealed, setDetectiveRevealed] = useState(saved?.detectiveRevealed ?? false);
+  const [nightVictim, setNightVictim] = useState(saved?.nightVictim ?? null); // resolved after night
+  const [nightNarrative, setNightNarrative] = useState("");
+  const [voteChoice, setVoteChoice] = useState(saved?.voteChoice ?? null);
+  const [lastEliminated, setLastEliminated] = useState(saved?.lastEliminated ?? null);
+  const [winner, setWinner] = useState(saved?.winner ?? null);
+  const [log, setLog] = useState(saved?.log ?? []);
+
+  const [timeLeft, setTimeLeft] = useState(0);
+  const timerRef = useRef(null);
+
+  const [showRules, setShowRules] = useState(false);
+  const [shareStatus, setShareStatus] = useState("");
+  const [showAllStats, setShowAllStats] = useState(false);
+  const [allStatsView, setAllStatsView] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const [actionTimeLeft, setActionTimeLeft] = useState(30);
+  const actionTimerRef = useRef(null);
+  const [detectiveCorrectCount, setDetectiveCorrectCount] = useState(saved?.detectiveCorrectCount ?? 0);
+  const [doctorSaveCount, setDoctorSaveCount] = useState(saved?.doctorSaveCount ?? 0);
+  const [mafiaKillCount, setMafiaKillCount] = useState(saved?.mafiaKillCount ?? 0);
+  const [statsSaved, setStatsSaved] = useState(saved?.statsSaved ?? false);
+  const [statsSnapshot, setStatsSnapshot] = useState(null);
+
+  // persist game progress so reopening the link resumes instead of restarting
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify({
+          phase, playerCount, names, counts, discussMinutes,
+          players, revealIndex, round, mafiaTarget, doctorSave,
+          detectiveTarget, detectiveResult, detectiveRevealed,
+          nightVictim, voteChoice, lastEliminated, winner, log,
+          detectiveCorrectCount, lastDoctorSave, statsSaved,
+          doctorSaveCount, mafiaKillCount,
+        })
+      );
+    } catch (e) {}
+  }, [phase, playerCount, names, counts, discussMinutes, players, revealIndex,
+      round, mafiaTarget, doctorSave, detectiveTarget, detectiveResult,
+      detectiveRevealed, nightVictim, voteChoice, lastEliminated, winner, log,
+      detectiveCorrectCount, lastDoctorSave, statsSaved,
+      doctorSaveCount, mafiaKillCount]);
+
+  // keep names array in sync with playerCount (skip on first mount so restored state isn't wiped)
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    setNames((prev) => {
+      const next = [...prev];
+      while (next.length < playerCount) next.push(`اللاعب ${next.length + 1}`);
+      while (next.length > playerCount) next.pop();
+      return next;
+    });
+    setCounts(defaultCounts(playerCount));
+  }, [playerCount]);
+
+  function updateCount(role, delta) {
+    setCounts((c) => {
+      const next = { ...c, [role]: Math.max(0, c[role] + delta) };
+      return next;
+    });
+  }
+
+  const villagerCount = Math.max(
+    0,
+    playerCount - counts.mafia - counts.detective - counts.doctor
+  );
+  const validSetup = playerCount >= 5 && counts.mafia >= 1 && villagerCount >= 0 &&
+    counts.mafia + counts.detective + counts.doctor <= playerCount;
+
+  function startGame() {
+    const roleList = [
+      ...Array(counts.mafia).fill("mafia"),
+      ...Array(counts.detective).fill("detective"),
+      ...Array(counts.doctor).fill("doctor"),
+      ...Array(villagerCount).fill("villager"),
+    ];
+    const shuffledRoles = shuffle(roleList);
+    const newPlayers = names.map((name, i) => ({
+      id: i,
+      name: name.trim() || `اللاعب ${i + 1}`,
+      role: shuffledRoles[i],
+      alive: true,
+    }));
+    setPlayers(newPlayers);
+    setRevealIndex(0);
+    setHasViewed(false);
+    setPressed(false);
+    setRound(1);
+    setLog([]);
+    setWinner(null);
+    setDetectiveCorrectCount(0);
+    setDoctorSaveCount(0);
+    setMafiaKillCount(0);
+    setLastDoctorSave(null);
+    setStatsSaved(false);
+    setStatsSnapshot(null);
+    setPhase("roles");
+  }
+
+  function nextReveal() {
+    if (revealIndex + 1 < players.length) {
+      setRevealIndex(revealIndex + 1);
+      setHasViewed(false);
+      setPressed(false);
+    } else {
+      goToNight();
+    }
+  }
+
+  function goToNight() {
+    setMafiaTarget(null);
+    setDoctorSave(null);
+    setDetectiveTarget(null);
+    setDetectiveResult(null);
+    setDetectiveRevealed(false);
+    setPhase("night-sleep");
+  }
+
+  const alivePlayers = players.filter((p) => p.alive);
+  const nonMafiaAlive = alivePlayers.filter((p) => p.role !== "mafia");
+  const aliveMafia = alivePlayers.filter((p) => p.role === "mafia");
+  const hasDetective = players.some((p) => p.role === "detective" && p.alive);
+  const hasDoctor = players.some((p) => p.role === "doctor" && p.alive);
+  const detectivePlayer = players.find((p) => p.role === "detective" && p.alive);
+  const detectiveTargets = detectivePlayer
+    ? alivePlayers.filter((p) => p.id !== detectivePlayer.id)
+    : alivePlayers;
+  const doctorPlayer = players.find((p) => p.role === "doctor" && p.alive);
+  const doctorTargets = alivePlayers.filter((p) => p.id !== lastDoctorSave);
+
+  const NIGHT_LINES_DEATH = [
+  "سُمع دوي طلقة من الزقاق المظلم، وبعدها ساد الصمت.",
+  "وُجدت سيارة سوداء متوقفة قرب الحي، ثم اختفت قبل الفجر.",
+  "انقطعت الكهرباء لدقيقة واحدة، وحين عادت كان أحدهم قد اختفى.",
+  "رنّ هاتف أحدهم في منتصف الليل، ولم يُجب أحد بعدها.",
+  "وُجد باب أحد المنازل مفتوحًا على مصراعيه صباحًا.",
+  "سُمعت خطوات سريعة تبتعد في الظلام، ثم صمت مفاجئ.",
+  "توقفت سيارة مشبوهة أمام أحد البيوت، ثم رحلت بسرعة.",
+  "سمع الجيران صوت جدال حاد، وبعده لم يظهر أحدهم مجددًا.",
+];
+
+const NIGHT_LINES_SAFE = [
+  "مرّت الليلة بهدوء غريب، لم يحدث شيء هذه المرة.",
+  "سُمعت حركة قرب الحي، لكنها ابتعدت دون أن تمسّ أحدًا.",
+  "أغلق الجميع أبوابهم جيدًا، ونجا الكل حتى الصباح.",
+  "شعر البعض بأن أحدًا يراقبهم، لكن لم يحدث مكروه.",
+  "انتهت الليلة دون خسائر، لكن الشك لا يزال يخيّم على الحي.",
+];
+
+function randomLine(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function randomFrom(list) {
+    if (list.length === 0) return null;
+    return list[Math.floor(Math.random() * list.length)].id;
+  }
+
+  function proceedFromMafia() {
+    setPhase(hasDoctor ? "night-doctor" : hasDetective ? "night-detective" : "night-final");
+  }
+  function proceedFromDoctor() {
+    setPhase(hasDetective ? "night-detective" : "night-final");
+  }
+  function confirmDetectiveInvestigation(targetId) {
+    const target = players.find((p) => p.id === targetId);
+    const correct = target ? target.role === "mafia" : false;
+    if (correct) setDetectiveCorrectCount((c) => c + 1);
+    setDetectiveResult(correct);
+    setDetectiveRevealed(true);
+  }
+
+  // 30-second timer for each night action phase — auto-advances if time runs out
+  useEffect(() => {
+    const isActionPhase =
+      phase === "night-mafia" ||
+      phase === "night-doctor" ||
+      (phase === "night-detective" && !detectiveRevealed);
+    if (!isActionPhase) return;
+    setActionTimeLeft(30);
+    actionTimerRef.current = setInterval(() => {
+      setActionTimeLeft((t) => {
+        if (t <= 1) {
+          clearInterval(actionTimerRef.current);
+          if (phase === "night-mafia") {
+            setMafiaTarget((cur) => (cur !== null ? cur : randomFrom(nonMafiaAlive)));
+            proceedFromMafia();
+          } else if (phase === "night-doctor") {
+            proceedFromDoctor();
+          } else if (phase === "night-detective") {
+            const currentTarget = detectiveTargetRef.current;
+            if (currentTarget !== null) {
+              confirmDetectiveInvestigation(currentTarget);
+            } else {
+              setPhase("night-final");
+            }
+          }
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(actionTimerRef.current);
+  }, [phase]);
+
+  function resolveNight() {
+    let victimId = mafiaTarget;
+    if (doctorSave !== null && doctorSave === mafiaTarget) {
+      victimId = null;
+      setDoctorSaveCount((c) => c + 1);
+    }
+    if (victimId !== null) {
+      setMafiaKillCount((c) => c + 1);
+    }
+    let updatedPlayers = players;
+    if (victimId !== null) {
+      updatedPlayers = players.map((p) =>
+        p.id === victimId ? { ...p, alive: false } : p
+      );
+      setPlayers(updatedPlayers);
+    }
+    setNightVictim(victimId);
+    setNightNarrative(victimId !== null ? randomLine(NIGHT_LINES_DEATH) : randomLine(NIGHT_LINES_SAFE));
+    setLog((l) => [
+      ...l,
+      victimId !== null
+        ? `الليلة ${round}: تم القضاء على ${players.find((p) => p.id === victimId)?.name}`
+        : `الليلة ${round}: نجا الجميع من هجوم الليلة`,
+    ]);
+    const result = checkWinner(updatedPlayers);
+    if (result) {
+      setWinner(result);
+      setPhase("end");
+    } else {
+      setPhase("night-result");
+    }
+  }
+
+  function checkWinner(list) {
+    const alive = list.filter((p) => p.alive);
+    const mafiaAlive = alive.filter((p) => p.role === "mafia").length;
+    const othersAlive = alive.length - mafiaAlive;
+    if (mafiaAlive === 0) return "village";
+    if (mafiaAlive >= othersAlive) return "mafia";
+    return null;
+  }
+
+  function startDiscussion() {
+    setVoteChoice(null);
+    setTimeLeft(discussMinutes * 60);
+    setPhase("day-discuss");
+  }
+
+  useEffect(() => {
+    if (phase === "day-discuss" && timeLeft > 0) {
+      timerRef.current = setInterval(() => {
+        setTimeLeft((t) => {
+          if (t <= 1) {
+            clearInterval(timerRef.current);
+            return 0;
+          }
+          return t - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timerRef.current);
+    }
+  }, [phase, timeLeft === discussMinutes * 60]);
+
+  function confirmVote() {
+    if (voteChoice === null) return;
+    if (voteChoice === "skip") {
+      setLastEliminated(null);
+      setLog((l) => [...l, `النهار ${round}: لم يتم طرد أحد (تعادل الأصوات)`]);
+      setPhase("day-result");
+      return;
+    }
+    const eliminated = players.find((p) => p.id === voteChoice);
+    const updated = players.map((p) =>
+      p.id === voteChoice ? { ...p, alive: false } : p
+    );
+    setPlayers(updated);
+    setLastEliminated(eliminated);
+    setLog((l) => [
+      ...l,
+      `النهار ${round}: تم طرد ${eliminated.name} (${ROLE_INFO[eliminated.role].label})`,
+    ]);
+    const result = checkWinner(updated);
+    if (result) {
+      setWinner(result);
+      setPhase("end");
+    } else {
+      setPhase("day-result");
+    }
+  }
+
+  function nextRound() {
+    if (doctorSave !== null) setLastDoctorSave(doctorSave);
+    setRound((r) => r + 1);
+    goToNight();
+  }
+
+  useEffect(() => {
+    if (phase === "end" && !statsSaved && players.length > 0) {
+      setStatsSaved(true);
+      const stats = loadStats();
+      players.forEach((p) => {
+        if (!stats[p.name]) stats[p.name] = { games: 0, wins: 0, correctGuesses: 0, saves: 0, kills: 0 };
+        if (stats[p.name].saves === undefined) stats[p.name].saves = 0;
+        if (stats[p.name].kills === undefined) stats[p.name].kills = 0;
+        stats[p.name].games += 1;
+        const playerWon =
+          (winner === "mafia" && p.role === "mafia") ||
+          (winner === "village" && p.role !== "mafia");
+        if (playerWon) stats[p.name].wins += 1;
+        if (p.role === "detective") {
+          stats[p.name].correctGuesses += detectiveCorrectCount;
+        }
+        if (p.role === "doctor") {
+          stats[p.name].saves += doctorSaveCount;
+        }
+        if (p.role === "mafia") {
+          stats[p.name].kills += mafiaKillCount;
+        }
+      });
+      saveStats(stats);
+      setStatsSnapshot(stats);
+    }
+  }, [phase]);
+
+  function buildShareText() {
+    const winnerLine = winner === "mafia" ? "🔪 فازت المافيا!" : "🏘️ فاز القرويون!";
+    const roster = players
+      .map((p) => `${p.alive ? "" : "☠️ "}${p.name} — ${ROLE_INFO[p.role].label}`)
+      .join("\n");
+    const logText = log.length ? "\n\nأحداث اللعبة:\n" + log.map((l) => "• " + l).join("\n") : "";
+    return `🔪 نتيجة لعبة المافيا 🩸\n\n${winnerLine}\n\nالأدوار:\n${roster}${logText}`;
+  }
+
+  async function handleShare() {
+    const text = buildShareText();
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: "نتيجة لعبة المافيا", text });
+      } else {
+        await navigator.clipboard.writeText(text);
+        setShareStatus("✅ تم نسخ النتيجة، الصقها بالواتساب");
+        setTimeout(() => setShareStatus(""), 3000);
+      }
+    } catch (e) {
+      try {
+        await navigator.clipboard.writeText(text);
+        setShareStatus("✅ تم نسخ النتيجة، الصقها بالواتساب");
+        setTimeout(() => setShareStatus(""), 3000);
+      } catch (e2) {
+        setShareStatus("تعذّرت المشاركة");
+      }
+    }
+  }
+
+  function resetGame() {
+    try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+    setPhase("setup");
+  }
+
+  const fmt = (s) => {
+    const m = Math.floor(s / 60)
+      .toString()
+      .padStart(2, "0");
+    const sec = (s % 60).toString().padStart(2, "0");
+    return `${m}:${sec}`;
+  };
+
+  return (
+    <div dir="rtl" lang="ar" className="stage">
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;900&family=Tajawal:wght@400;500;700&display=swap');
+
+        * {
+          box-sizing: border-box;
+          -webkit-tap-highlight-color: transparent;
+          -webkit-touch-callout: none;
+        }
+        html, body {
+          overscroll-behavior: none;
+        }
+        .stage {
+          min-height: 100vh;
+          min-height: 100dvh;
+          width: 100%;
+          background: radial-gradient(ellipse at 50% -10%, #23222b 0%, #0b0b0f 55%, #050506 100%);
+          color: #ece5d8;
+          font-family: 'Tajawal', sans-serif;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          padding: calc(28px + env(safe-area-inset-top)) 16px calc(48px + env(safe-area-inset-bottom));
+          position: relative;
+          overflow-x: hidden;
+          overscroll-behavior: none;
+          user-select: none;
+          -webkit-user-select: none;
+        }
+        input[type=text] { user-select: text; -webkit-user-select: text; }
+        .stage::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background-image: radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px);
+          background-size: 3px 3px;
+          pointer-events: none;
+        }
+        h1, h2, h3 { font-family: 'Cairo', sans-serif; margin: 0; }
+        .title {
+          font-weight: 900;
+          font-size: 28px;
+          letter-spacing: 1px;
+          color: #d4a73a;
+          text-shadow: 0 0 18px rgba(212,167,58,0.35);
+          margin-bottom: 24px;
+        }
+        .panel {
+          background: linear-gradient(180deg, #17171c 0%, #111116 100%);
+          border: 1px solid #2a2a32;
+          border-radius: 14px;
+          padding: 20px;
+          width: 100%;
+          max-width: 420px;
+          box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        }
+        .row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 14px;
+        }
+        .stepper {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+        .stepper button {
+          width: 32px; height: 32px;
+          border-radius: 8px;
+          border: 1px solid #3a3a44;
+          background: #1e1e24;
+          color: #ece5d8;
+          font-size: 18px;
+          cursor: pointer;
+        }
+        .stepper button:active { transform: scale(0.95); }
+        .stepper span { min-width: 24px; text-align: center; font-weight: 700; font-family: 'Cairo', sans-serif; }
+        label.small { font-size: 13px; color: #a89f8d; }
+        input[type=text] {
+          background: #1c1c22;
+          border: 1px solid #33333c;
+          border-radius: 8px;
+          color: #ece5d8;
+          padding: 8px 10px;
+          font-family: 'Tajawal', sans-serif;
+          font-size: 14px;
+          width: 100%;
+        }
+        .name-list { max-height: 200px; overflow-y: auto; margin: 10px 0; display: flex; flex-direction: column; gap: 8px; padding-left: 4px; }
+        .role-count-label { display:flex; align-items:center; gap:8px; }
+        .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+        .btn-primary {
+          width: 100%;
+          padding: 14px;
+          border-radius: 10px;
+          border: none;
+          background: linear-gradient(180deg, #d4a73a, #b3872a);
+          color: #1a1408;
+          font-family: 'Cairo', sans-serif;
+          font-weight: 900;
+          font-size: 16px;
+          cursor: pointer;
+          margin-top: 10px;
+          box-shadow: 0 8px 20px rgba(212,167,58,0.25);
+        }
+        .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; box-shadow:none; }
+        .btn-secondary {
+          width: 100%;
+          padding: 12px;
+          border-radius: 10px;
+          border: 1px solid #3a3a44;
+          background: transparent;
+          color: #ece5d8;
+          font-family: 'Cairo', sans-serif;
+          font-weight: 700;
+          font-size: 14px;
+          cursor: pointer;
+          margin-top: 10px;
+        }
+        .helper { font-size: 12px; color: #7a7364; margin-top: 6px; text-align: center; }
+        .rules-link {
+          background: none;
+          border: 1px solid #33333c;
+          color: #a89f8d;
+          font-family: 'Tajawal', sans-serif;
+          font-size: 13px;
+          padding: 6px 14px;
+          border-radius: 20px;
+          cursor: pointer;
+        }
+        .top-links {
+          display: flex;
+          gap: 10px;
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.7);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 50;
+          padding: 20px;
+        }
+        .modal-panel {
+          background: #17171c;
+          border: 1px solid #2a2a32;
+          border-radius: 14px;
+          padding: 20px;
+          max-width: 420px;
+          width: 100%;
+          max-height: 80vh;
+          overflow-y: auto;
+        }
+        .modal-title {
+          font-family: 'Cairo', sans-serif;
+          font-weight: 900;
+          font-size: 20px;
+          color: #d4a73a;
+          margin-bottom: 12px;
+        }
+        .modal-body { font-size: 14px; line-height: 1.8; color: #ece5d8; margin-bottom: 16px; }
+        .modal-body ul { padding-inline-start: 20px; margin: 8px 0; }
+        .modal-body li { margin-bottom: 6px; }
+
+        /* role reveal card */
+        .reveal-wrap { display:flex; flex-direction:column; align-items:center; gap:18px; width:100%; max-width:380px; }
+        .player-name { font-family:'Cairo', sans-serif; font-weight:900; font-size:20px; color:#ece5d8; }
+        .card {
+          width: 260px;
+          height: 340px;
+          border-radius: 18px;
+          position: relative;
+          display:flex; align-items:center; justify-content:center;
+          background: repeating-linear-gradient(135deg, #141419, #141419 10px, #17171d 10px, #17171d 20px);
+          border: 1px solid #2c2c34;
+          box-shadow: inset 0 0 60px rgba(0,0,0,0.6);
+          user-select: none;
+          -webkit-user-select: none;
+          touch-action: none;
+        }
+        .card .hint {
+          color: #5f5a4e;
+          font-family: 'Cairo', sans-serif;
+          font-size: 14px;
+          text-align: center;
+          padding: 0 20px;
+        }
+        .card .role-content {
+          text-align: center;
+          padding: 20px;
+        }
+        .role-name {
+          font-family:'Cairo', sans-serif;
+          font-weight: 900;
+          font-size: 30px;
+          margin-bottom: 10px;
+        }
+        .role-desc { font-size: 14px; color:#c9c2b3; line-height:1.6; }
+        .glow-overlay {
+          position: absolute;
+          inset: 0;
+          border-radius: 18px;
+          pointer-events: none;
+          transition: opacity 0.25s ease;
+        }
+        .match-btn {
+          font-family:'Cairo', sans-serif;
+          font-weight:700;
+          font-size: 15px;
+          padding: 12px 24px;
+          border-radius: 30px;
+          border: 1px solid #4a3f22;
+          background: #201a0d;
+          color: #d4a73a;
+          cursor: pointer;
+        }
+        .progress-dots { display:flex; gap:6px; margin-top:6px; }
+        .progress-dots span { width:7px; height:7px; border-radius:50%; background:#2e2e36; }
+        .progress-dots span.done { background:#d4a73a; }
+
+        /* night / day */
+        .info-box {
+          text-align:center;
+          margin-bottom: 18px;
+        }
+        .phase-tag {
+          display:inline-block;
+          font-family:'Cairo', sans-serif;
+          font-weight:700;
+          font-size: 12px;
+          letter-spacing:1px;
+          padding: 4px 12px;
+          border-radius: 20px;
+          margin-bottom: 10px;
+        }
+        .tag-night { background: rgba(61,107,138,0.15); color:#6ea8cf; border:1px solid #2c4a5e; }
+        .tag-day { background: rgba(212,167,58,0.15); color:#d4a73a; border:1px solid #5a4a22; }
+        .instruction { font-size: 15px; color:#ece5d8; line-height:1.7; max-width:380px; margin: 0 auto; }
+        .narrative-line {
+          font-style: italic;
+          font-size: 14px;
+          color: #a89f8d;
+          margin-bottom: 12px;
+          line-height: 1.7;
+        }
+        .player-grid {
+          display:grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+          width: 100%;
+          max-width: 420px;
+          margin: 16px 0;
+        }
+        .player-chip {
+          padding: 12px 10px;
+          border-radius: 10px;
+          border: 1px solid #2c2c34;
+          background: #17171c;
+          text-align:center;
+          font-family:'Cairo', sans-serif;
+          font-weight:700;
+          font-size:14px;
+          cursor:pointer;
+        }
+        .player-chip.selected {
+          border-color: #d4a73a;
+          background: rgba(212,167,58,0.12);
+          color: #d4a73a;
+        }
+        .player-chip.dead { opacity:0.3; text-decoration: line-through; cursor:default; }
+        .skip-chip {
+          margin-top: 4px;
+          padding: 12px 10px;
+          border-radius: 10px;
+          border: 1px dashed #4a4a56;
+          background: transparent;
+          color: #a89f8d;
+          text-align:center;
+          font-family:'Cairo', sans-serif;
+          font-weight:700;
+          font-size:13px;
+          cursor:pointer;
+        }
+        .skip-chip.selected {
+          border-color: #d4a73a;
+          border-style: solid;
+          background: rgba(212,167,58,0.12);
+          color: #d4a73a;
+        }
+        .alive-counter {
+          font-family:'Cairo', sans-serif;
+          font-size: 13px;
+          color: #a89f8d;
+          margin-bottom: 14px;
+          display:flex;
+          gap: 16px;
+        }
+        .timer {
+          font-family:'Cairo', sans-serif;
+          font-weight:900;
+          font-size: 44px;
+          color: #d4a73a;
+          text-align:center;
+          letter-spacing:2px;
+        }
+        .action-timer {
+          font-family:'Cairo', sans-serif;
+          font-weight:900;
+          font-size: 36px;
+          color: #c94b4b;
+          text-align:center;
+          margin: 10px 0 2px;
+        }
+        .result-card {
+          text-align:center;
+          padding: 20px;
+          border-radius: 14px;
+          border: 1px solid #2a2a32;
+          background:#141418;
+          max-width: 380px;
+          margin-bottom: 16px;
+        }
+        .end-title { font-size:26px; margin-bottom:6px; }
+        .log-list { font-size:13px; color:#948c7c; max-width:380px; margin-top: 14px; line-height:1.9; text-align:right; }
+        .leaderboard { margin-top: 16px; padding-top: 14px; border-top: 1px solid #262630; text-align: right; }
+        .leaderboard-title { font-family:'Cairo', sans-serif; font-weight:700; font-size:14px; color:#d4a73a; margin-bottom:8px; }
+        .leaderboard-row { display:flex; justify-content:space-between; font-size:13px; color:#c9c2b3; padding:4px 0; }
+      `}</style>
+
+      <div className="title">🔪 المافيا 🩸</div>
+      <div className="top-links">
+        <button className="rules-link" onClick={() => setShowRules(true)}>📖 قواعد اللعبة</button>
+        <button
+          className="rules-link"
+          onClick={() => {
+            setAllStatsView(loadStats());
+            setConfirmingDelete(false);
+            setShowAllStats(true);
+          }}
+        >
+          📊 كل الإحصائيات
+        </button>
+      </div>
+
+      {showAllStats && (
+        <div className="modal-overlay" onClick={() => setShowAllStats(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">📊 إحصائيات كل الألعاب</div>
+            {allStatsView && Object.keys(allStatsView).length > 0 ? (
+              <div className="leaderboard" style={{ marginTop: 0, borderTop: "none", paddingTop: 0 }}>
+                {Object.entries(allStatsView)
+                  .sort((a, b) => b[1].wins - a[1].wins)
+                  .map(([name, s]) => (
+                    <div key={name} className="leaderboard-row">
+                      <span>{name}</span>
+                      <span>
+                        🏅 {s.wins}/{s.games}
+                        {s.correctGuesses > 0 ? ` · 🔍 ${s.correctGuesses}` : ""}
+                        {s.saves > 0 ? ` · 🛡️ ${s.saves}` : ""}
+                        {s.kills > 0 ? ` · 🔪 ${s.kills}` : ""}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <div className="modal-body">ما فيه ألعاب محفوظة بعد.</div>
+            )}
+            {!confirmingDelete ? (
+              <button
+                className="btn-secondary"
+                style={{ marginTop: 14 }}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                🗑️ مسح الإحصائيات
+              </button>
+            ) : (
+              <div style={{ marginTop: 14 }}>
+                <div className="helper" style={{ marginBottom: 8 }}>
+                  متأكد؟ هذا الإجراء لا يمكن التراجع عنه.
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    className="btn-secondary"
+                    style={{ flex: 1, borderColor: "#9c2b45", color: "#e07a91" }}
+                    onClick={() => {
+                      try { localStorage.removeItem(STATS_KEY); } catch (e) {}
+                      setAllStatsView({});
+                      setConfirmingDelete(false);
+                    }}
+                  >
+                    نعم، امسح
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    style={{ flex: 1 }}
+                    onClick={() => setConfirmingDelete(false)}
+                  >
+                    تراجع
+                  </button>
+                </div>
+              </div>
+            )}
+            <button className="btn-primary" onClick={() => setShowAllStats(false)}>إغلاق</button>
+          </div>
+        </div>
+      )}
+
+      {showRules && (
+        <div className="modal-overlay" onClick={() => setShowRules(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-title">📖 قواعد اللعبة</div>
+            <div className="modal-body">
+              <p><b>الفكرة:</b> القرية فيها مافيا مختبئة بين القرويين. القرويين لازم يكتشفون المافيا بالنقاش والتصويت، قبل ما المافيا تقضي عليهم كلهم.</p>
+              <p><b>الأدوار:</b></p>
+              <ul>
+                <li><b style={{ color: ROLE_INFO.mafia.color }}>المافيا</b>: {ROLE_INFO.mafia.desc}</li>
+                <li><b style={{ color: ROLE_INFO.detective.color }}>المحقق</b>: {ROLE_INFO.detective.desc}</li>
+                <li><b style={{ color: ROLE_INFO.doctor.color }}>الطبيب</b>: {ROLE_INFO.doctor.desc}</li>
+                <li><b style={{ color: ROLE_INFO.villager.color }}>القروي</b>: {ROLE_INFO.villager.desc}</li>
+              </ul>
+              <p><b>سير اللعبة:</b></p>
+              <ul>
+                <li>كل واحد يشوف دوره سرًا بالضغط المطول على البطاقة</li>
+                <li>بالليل: المافيا تختار ضحية، الطبيب يحمي، المحقق يتحرى — كل واحد عنده 30 ثانية</li>
+                <li>بالنهار: نقاش جماعي ثم تصويت لطرد المشتبه فيه</li>
+                <li>القرويون يفوزون لو انتهت المافيا، والمافيا تفوز لو صارت تعادل أو تفوق باقي اللاعبين</li>
+              </ul>
+            </div>
+            <button className="btn-primary" onClick={() => setShowRules(false)}>فهمت</button>
+          </div>
+        </div>
+      )}
+
+      {players.length > 0 && !["setup", "roles", "end"].includes(phase) && (
+        <div className="alive-counter">
+          <span>🧑‍🤝‍🧑 أحياء: {alivePlayers.length}</span>
+          <span>☠️ أموات: {players.length - alivePlayers.length}</span>
+        </div>
+      )}
+
+      {phase === "setup" && (
+        <div className="panel">
+          <div className="row">
+            <label>عدد اللاعبين</label>
+            <div className="stepper">
+              <button onClick={() => setPlayerCount((n) => Math.min(16, n + 1))}>+</button>
+              <span>{playerCount}</span>
+              <button onClick={() => setPlayerCount((n) => Math.max(5, n - 1))}>−</button>
+            </div>
+          </div>
+
+          <label className="small">أسماء اللاعبين</label>
+          <div className="name-list">
+            {names.map((n, i) => (
+              <input
+                key={i}
+                type="text"
+                value={n}
+                onChange={(e) => {
+                  const next = [...names];
+                  next[i] = e.target.value;
+                  setNames(next);
+                }}
+              />
+            ))}
+          </div>
+
+          <div style={{ borderTop: "1px solid #262630", margin: "14px 0" }} />
+
+          <div className="row">
+            <div className="role-count-label">
+              <span className="dot" style={{ background: ROLE_INFO.mafia.color }} />
+              مافيا
+            </div>
+            <div className="stepper">
+              <button onClick={() => updateCount("mafia", 1)}>+</button>
+              <span>{counts.mafia}</span>
+              <button onClick={() => updateCount("mafia", -1)}>−</button>
+            </div>
+          </div>
+          <div className="row">
+            <div className="role-count-label">
+              <span className="dot" style={{ background: ROLE_INFO.detective.color }} />
+              محقق
+            </div>
+            <div className="stepper">
+              <button onClick={() => updateCount("detective", 1)}>+</button>
+              <span>{counts.detective}</span>
+              <button onClick={() => updateCount("detective", -1)}>−</button>
+            </div>
+          </div>
+          <div className="row">
+            <div className="role-count-label">
+              <span className="dot" style={{ background: ROLE_INFO.doctor.color }} />
+              طبيب
+            </div>
+            <div className="stepper">
+              <button onClick={() => updateCount("doctor", 1)}>+</button>
+              <span>{counts.doctor}</span>
+              <button onClick={() => updateCount("doctor", -1)}>−</button>
+            </div>
+          </div>
+          <div className="row" style={{ marginBottom: 0 }}>
+            <div className="role-count-label">
+              <span className="dot" style={{ background: ROLE_INFO.villager.color }} />
+              قرويين (تلقائي)
+            </div>
+            <span style={{ fontFamily: "Cairo", fontWeight: 700 }}>{villagerCount}</span>
+          </div>
+
+          <div style={{ borderTop: "1px solid #262630", margin: "14px 0" }} />
+
+          <div className="row" style={{ marginBottom: 0 }}>
+            <label>مدة نقاش النهار (دقائق)</label>
+            <div className="stepper">
+              <button onClick={() => setDiscussMinutes((m) => Math.min(10, m + 1))}>+</button>
+              <span>{discussMinutes}</span>
+              <button onClick={() => setDiscussMinutes((m) => Math.max(1, m - 1))}>−</button>
+            </div>
+          </div>
+
+          <button className="btn-primary" disabled={!validSetup} onClick={startGame}>
+            ابدأ اللعبة
+          </button>
+          {playerCount < 5 ? (
+            <div className="helper">⚠️ لازم 5 لاعبين على الأقل عشان تبدأ اللعبة</div>
+          ) : !validSetup ? (
+            <div className="helper">تأكد إن عدد الأدوار المحددة ما يتجاوز عدد اللاعبين</div>
+          ) : null}
+        </div>
+      )}
+
+      {phase === "roles" && players.length > 0 && (
+        <div className="reveal-wrap">
+          <div className="player-name">مرر الجوال إلى: {players[revealIndex].name}</div>
+          <div
+            className="card"
+            onMouseDown={() => { setPressed(true); setHasViewed(true); }}
+            onMouseUp={() => setPressed(false)}
+            onMouseLeave={() => setPressed(false)}
+            onTouchStart={() => { setPressed(true); setHasViewed(true); }}
+            onTouchEnd={() => setPressed(false)}
+          >
+            <div
+              className="glow-overlay"
+              style={{
+                opacity: pressed ? 1 : 0,
+                boxShadow: pressed
+                  ? `inset 0 0 70px ${ROLE_INFO[players[revealIndex].role].color}55, 0 0 40px ${ROLE_INFO[players[revealIndex].role].color}66`
+                  : "none",
+              }}
+            />
+            {pressed ? (
+              <div className="role-content">
+                <div className="role-name" style={{ color: ROLE_INFO[players[revealIndex].role].color }}>
+                  {ROLE_INFO[players[revealIndex].role].label}
+                </div>
+                <div className="role-desc">{ROLE_INFO[players[revealIndex].role].desc}</div>
+              </div>
+            ) : (
+              <div className="hint">🕯️<br />اضغط مطولًا على البطاقة<br />لترى دورك السري</div>
+            )}
+          </div>
+          <button className="btn-primary" disabled={!hasViewed} onClick={nextReveal}>
+            {revealIndex + 1 < players.length ? "التالي" : "ابدأ الليلة الأولى"}
+          </button>
+          <div className="progress-dots">
+            {players.map((_, i) => (
+              <span key={i} className={i <= revealIndex ? "done" : ""} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {phase === "night-sleep" && (
+        <div className="panel" style={{ textAlign: "center" }}>
+          <span className="phase-tag tag-night">🌙 الليلة {round}</span>
+          <div className="instruction">
+            على الجميع إغلاق أعينهم الآن.<br />مرّر الجوال للاعب الذي يمسك الهاتف (الراوي) واضغط متابعة عندما يكون الجميع نائمين.
+          </div>
+          <button className="btn-primary" onClick={() => setPhase("night-mafia")}>متابعة</button>
+        </div>
+      )}
+
+      {phase === "night-mafia" && (
+        <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
+          <span className="phase-tag tag-night">🌙 الليلة {round}</span>
+          <div className="instruction">لتفتح المافيا أعينها وتتفق سرًا على ضحية الليلة.</div>
+          <div className="action-timer">{actionTimeLeft}</div>
+          <div className="player-grid">
+            {nonMafiaAlive.map((p) => (
+              <div
+                key={p.id}
+                className={`player-chip ${mafiaTarget === p.id ? "selected" : ""}`}
+                onClick={() => setMafiaTarget(p.id)}
+              >
+                {p.name}
+              </div>
+            ))}
+          </div>
+          <button
+            className="btn-primary"
+            disabled={mafiaTarget === null}
+            onClick={proceedFromMafia}
+          >
+            تأكيد واغلق أعين المافيا
+          </button>
+        </div>
+      )}
+
+      {phase === "night-doctor" && (
+        <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
+          <span className="phase-tag tag-night">🌙 الليلة {round}</span>
+          <div className="instruction">ليفتح الطبيب عينيه ويختار شخصًا لحمايته الليلة.</div>
+          <div className="action-timer">{actionTimeLeft}</div>
+          <div className="player-grid">
+            {doctorTargets.map((p) => (
+              <div
+                key={p.id}
+                className={`player-chip ${doctorSave === p.id ? "selected" : ""}`}
+                onClick={() => setDoctorSave(p.id)}
+              >
+                {p.name}
+              </div>
+            ))}
+          </div>
+          <button
+            className="btn-primary"
+            disabled={doctorSave === null}
+            onClick={proceedFromDoctor}
+          >
+            تأكيد واغلق عيني الطبيب
+          </button>
+        </div>
+      )}
+
+      {phase === "night-detective" && (
+        <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
+          <span className="phase-tag tag-night">🌙 الليلة {round}</span>
+          {!detectiveRevealed ? (
+            <>
+              <div className="instruction">ليفتح المحقق عينيه ويختار شخصًا للتحري عنه.</div>
+              <div className="action-timer">{actionTimeLeft}</div>
+              <div className="player-grid">
+                {detectiveTargets.map((p) => (
+                  <div
+                    key={p.id}
+                    className={`player-chip ${detectiveTarget === p.id ? "selected" : ""}`}
+                    onClick={() => setDetectiveTarget(p.id)}
+                  >
+                    {p.name}
+                  </div>
+                ))}
+              </div>
+              <button
+                className="btn-primary"
+                disabled={detectiveTarget === null}
+                onClick={() => confirmDetectiveInvestigation(detectiveTarget)}
+              >
+                كشف النتيجة
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="result-card">
+                <div style={{ fontFamily: "Cairo", fontWeight: 900, fontSize: 20, color: detectiveResult ? "#9c2b45" : "#3d8a5f" }}>
+                  {detectiveResult ? "هذا الشخص من المافيا 🔪" : "هذا الشخص ليس من المافيا ✅"}
+                </div>
+              </div>
+              <div className="instruction">أرِ هذه النتيجة للمحقق فقط، ثم أغلق عينيه.</div>
+              <button className="btn-primary" onClick={() => setPhase("night-final")}>متابعة</button>
+            </>
+          )}
+        </div>
+      )}
+
+      {phase === "night-final" && (
+        <div className="panel" style={{ textAlign: "center" }}>
+          <span className="phase-tag tag-night">🌙 الليلة {round}</span>
+          <div className="instruction">
+            ليفتح الجميع أعينهم الآن.<br />القرية تستيقظ لترى ما حدث الليلة الماضية...
+          </div>
+          <button className="btn-primary" onClick={resolveNight}>كشف نتيجة الليلة</button>
+        </div>
+      )}
+
+      {phase === "night-result" && (
+        <div className="panel" style={{ textAlign: "center" }}>
+          <span className="phase-tag tag-night">نتيجة الليلة {round}</span>
+          <div className="narrative-line">{nightNarrative}</div>
+          {nightVictim !== null ? (
+            <div className="instruction">
+              تم العثور على <b>{players.find((p) => p.id === nightVictim)?.name}</b> ضحية هذه الليلة.
+            </div>
+          ) : (
+            <div className="instruction">نجا الجميع الليلة!</div>
+          )}
+          <button className="btn-primary" onClick={startDiscussion}>ابدأ نقاش النهار</button>
+        </div>
+      )}
+
+      {phase === "day-discuss" && (
+        <div className="panel" style={{ textAlign: "center" }}>
+          <span className="phase-tag tag-day">☀️ النهار {round}</span>
+          <div className="instruction" style={{ marginBottom: 14 }}>ناقشوا من تشكّون أنه من المافيا.</div>
+          <div className="timer">{fmt(timeLeft)}</div>
+          <button className="btn-secondary" onClick={() => setPhase("day-vote")}>
+            {timeLeft === 0 ? "انتقل للتصويت" : "تخطي المؤقت والتصويت الآن"}
+          </button>
+        </div>
+      )}
+
+      {phase === "day-vote" && (
+        <div style={{ width: "100%", maxWidth: 420, textAlign: "center" }}>
+          <span className="phase-tag tag-day">☀️ النهار {round}</span>
+          <div className="instruction">صوتوا بصوت عالٍ، ثم اختر اللاعب صاحب أكثر الأصوات لطرده. لو تعادلت الأصوات، اختر "تخطي".</div>
+          <div className="player-grid">
+            {alivePlayers.map((p) => (
+              <div
+                key={p.id}
+                className={`player-chip ${voteChoice === p.id ? "selected" : ""}`}
+                onClick={() => setVoteChoice(p.id)}
+              >
+                {p.name}
+              </div>
+            ))}
+          </div>
+          <div
+            className={`skip-chip ${voteChoice === "skip" ? "selected" : ""}`}
+            onClick={() => setVoteChoice("skip")}
+          >
+            ⏭️ تخطي (تعادل الأصوات، ما أحد يُطرد)
+          </div>
+          <button className="btn-primary" disabled={voteChoice === null} onClick={confirmVote}>
+            {voteChoice === "skip" ? "تأكيد التخطي" : "تأكيد الطرد"}
+          </button>
+        </div>
+      )}
+
+      {phase === "day-result" && (
+        <div className="panel" style={{ textAlign: "center" }}>
+          <span className="phase-tag tag-day">نتيجة النهار {round}</span>
+          {lastEliminated ? (
+            <div className="instruction">
+              تم طرد <b>{lastEliminated.name}</b>.<br />
+              كان دوره: <span style={{ color: ROLE_INFO[lastEliminated.role].color, fontWeight: 700 }}>
+                {ROLE_INFO[lastEliminated.role].label}
+              </span>
+            </div>
+          ) : (
+            <div className="instruction">تعادلت الأصوات، ما أحد اتطرد اليوم.</div>
+          )}
+          <button className="btn-primary" onClick={nextRound}>ابدأ الليلة التالية</button>
+        </div>
+      )}
+
+      {phase === "end" && (
+        <div className="panel" style={{ textAlign: "center" }}>
+          <div className="end-title" style={{ color: winner === "mafia" ? "#9c2b45" : "#d4a73a" }}>
+            {winner === "mafia" ? "🔪 فازت المافيا!" : "🏘️ فاز القرويون!"}
+          </div>
+          <div className="instruction" style={{ marginBottom: 10 }}>الأدوار الكاملة:</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+            {players.map((p) => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 14 }}>
+                <span>{p.name} {!p.alive && "☠️"}</span>
+                <span style={{ color: ROLE_INFO[p.role].color, fontWeight: 700 }}>{ROLE_INFO[p.role].label}</span>
+              </div>
+            ))}
+          </div>
+          {log.length > 0 && (
+            <div className="log-list">
+              {log.map((l, i) => <div key={i}>• {l}</div>)}
+            </div>
+          )}
+          {statsSnapshot && (
+            <div className="leaderboard">
+              <div className="leaderboard-title">🏆 إحصائيات اللاعبين (كل الألعاب)</div>
+              {Object.entries(statsSnapshot)
+                .sort((a, b) => b[1].wins - a[1].wins)
+                .slice(0, 8)
+                .map(([name, s]) => (
+                  <div key={name} className="leaderboard-row">
+                    <span>{name}</span>
+                    <span>
+                      🏅 {s.wins}/{s.games}
+                      {s.correctGuesses > 0 ? ` · 🔍 ${s.correctGuesses}` : ""}
+                      {s.saves > 0 ? ` · 🛡️ ${s.saves}` : ""}
+                      {s.kills > 0 ? ` · 🔪 ${s.kills}` : ""}
+                    </span>
+                  </div>
+                ))}
+            </div>
+          )}
+          <button className="btn-secondary" onClick={handleShare}>📤 مشاركة النتيجة</button>
+          {shareStatus && <div className="helper">{shareStatus}</div>}
+          <button className="btn-primary" onClick={resetGame}>لعبة جديدة</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<MafiaGame />);
+</script>
+</body>
+</html>
